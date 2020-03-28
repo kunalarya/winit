@@ -66,7 +66,7 @@ impl ViewState {
     }
 }
 
-pub fn new_view(ns_window: id) -> (IdRef, Weak<Mutex<CursorState>>) {
+pub fn new_view(ns_window: id, parent_view: Option<id>) -> (IdRef, Weak<Mutex<CursorState>>) {
     let cursor_state = Default::default();
     let cursor_access = Arc::downgrade(&cursor_state);
     let state = ViewState {
@@ -81,11 +81,22 @@ pub fn new_view(ns_window: id) -> (IdRef, Weak<Mutex<CursorState>>) {
     unsafe {
         // This is free'd in `dealloc`
         let state_ptr = Box::into_raw(Box::new(state)) as *mut c_void;
-        let ns_view: id = msg_send![VIEW_CLASS.0, alloc];
-        (
-            IdRef::new(msg_send![ns_view, initWithWinit: state_ptr]),
-            cursor_access,
-        )
+        let ns_view_ptr: id = msg_send![VIEW_CLASS.0, alloc];
+        let ns_view_initialized: id = msg_send![ns_view_ptr, initWithWinit: state_ptr];
+
+        if let Some(parent_view_id) = parent_view {
+            trace!("adding subview for {:?}", parent_view_id as *mut _);
+            parent_view_id.addSubview_(ns_view_initialized);
+
+            // TODO: Plumb in support for window titles:
+            let title = util::ns_string_id_ref(&"Test");
+
+            ns_window.setContentView_(ns_view_initialized);
+            ns_window.setReleasedWhenClosed_(NO);
+            ns_window.setTitle_(*title);
+            ns_window.setAcceptsMouseMovedEvents_(YES);
+        }
+        (IdRef::new(ns_view_initialized), cursor_access)
     }
 }
 
@@ -264,6 +275,7 @@ lazy_static! {
 }
 
 extern "C" fn dealloc(this: &Object, _sel: Sel) {
+    info!("deallocating NsView");
     unsafe {
         let state: *mut c_void = *this.get_ivar("winitState");
         let marked_text: id = *this.get_ivar("markedText");

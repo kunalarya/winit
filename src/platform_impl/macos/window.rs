@@ -27,7 +27,9 @@ use crate::{
         window_delegate::new_delegate,
         OsError,
     },
-    window::{CursorIcon, Fullscreen, WindowAttributes, WindowId as RootWindowId},
+    window::{
+        CursorIcon, Fullscreen, WindowAttributes, WindowId as RootWindowId, WindowParentHandle,
+    },
 };
 use cocoa::{
     appkit::{
@@ -57,6 +59,34 @@ impl Id {
 // for the window.
 pub fn get_window_id(window_cocoa_id: id) -> Id {
     Id(window_cocoa_id as *const Object as _)
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PlatformSpecificParentHandle {
+    pub parent: Option<IdRef>,
+}
+
+impl WindowParentHandle for PlatformSpecificParentHandle {
+    fn from_raw(window_handle: *mut c_void) -> Self {
+        // TODO: This is potentially unsafe, as it seems dropping IdRef will schedule the contained
+        // id to unallocate. Need to determine if this will lead to double free exceptions.
+        PlatformSpecificParentHandle {
+            parent: Some(IdRef::retain(window_handle as id)),
+        }
+    }
+}
+
+// Allow users of this code access to the platform-specific information we export.
+// TODO: There may be a better way to solve this problem; i.e. letting glutin
+// have access to the ns_view we've created to set up the appropriate GL context.
+pub struct PlatformSpecificChildWindow {
+    pub ns_view: id,
+}
+
+impl PlatformSpecificChildWindow {
+    pub fn new(ns_view: id) -> Self {
+        PlatformSpecificChildWindow { ns_view }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -92,9 +122,10 @@ fn create_app(activation_policy: ActivationPolicy) -> Option<id> {
 
 unsafe fn create_view(
     ns_window: id,
+    ns_parent_view: Option<id>,
     pl_attribs: &PlatformSpecificWindowBuilderAttributes,
 ) -> Option<(IdRef, Weak<Mutex<CursorState>>)> {
-    let (ns_view, cursor_state) = new_view(ns_window);
+    let (ns_view, cursor_state) = new_view(ns_window, ns_parent_view);
     ns_view.non_nil().map(|ns_view| {
         if !pl_attribs.disallow_hidpi {
             ns_view.setWantsBestResolutionOpenGLSurface_(YES);
@@ -304,6 +335,7 @@ pub struct UnownedWindow {
     decorations: AtomicBool,
     cursor_state: Weak<Mutex<CursorState>>,
     pub inner_rect: Option<PhysicalSize<u32>>,
+    pub managed_by_external_code: bool,
 }
 
 unsafe impl Send for UnownedWindow {}
@@ -332,8 +364,8 @@ impl UnownedWindow {
             os_error!(OsError::CreationError("Couldn't create `NSWindow`"))
         })?;
 
-        let (ns_view, cursor_state) =
-            unsafe { create_view(*ns_window, &pl_attribs) }.ok_or_else(|| {
+        let (ns_view, cursor_state) = unsafe { create_view(*ns_window, None, &pl_attribs) }
+            .ok_or_else(|| {
                 unsafe { pool.drain() };
                 os_error!(OsError::CreationError("Couldn't create `NSView`"))
             })?;
@@ -388,6 +420,7 @@ impl UnownedWindow {
             decorations: AtomicBool::new(decorations),
             cursor_state,
             inner_rect,
+            managed_by_external_code: false,
         });
 
         let delegate = new_delegate(&window, fullscreen.is_some());
@@ -413,6 +446,101 @@ impl UnownedWindow {
         unsafe { pool.drain() };
 
         Ok((window, delegate))
+    }
+
+    pub fn from_parent(
+        parent: &PlatformSpecificParentHandle,
+        mut win_attribs: WindowAttributes,
+        pl_attribs: PlatformSpecificWindowBuilderAttributes,
+    ) -> Result<(Arc<Self>, id, IdRef), RootOsError> {
+        // TODO: The following may release the id using NSAutoreleasePool, meaning a double
+        // free error.  Need to double check unowned Id reference.
+
+        // TODO: Cleaner error handling (use oserror! macro).
+        let ns_parent_view: IdRef = parent.clone().parent.unwrap();
+
+        // Query the NSView for its parent window.
+        let ns_window = IdRef::retain(unsafe { msg_send![*ns_parent_view, window] });
+
+        // Now create the view, but set the parent NSView.
+        let (ns_view, cursor_state) =
+            unsafe { create_view(*ns_window, Some(*ns_parent_view), &pl_attribs) }
+                .ok_or_else(|| os_error!(OsError::CreationError("Couldn't create `NSView`")))?;
+
+        let input_context = unsafe { util::create_input_context(*ns_view) };
+
+        let dpi_factor = unsafe { NSWindow::backingScaleFactor(*ns_window) as f64 };
+
+        unsafe {
+            if win_attribs.transparent {
+                ns_window.setOpaque_(NO);
+                ns_window.setBackgroundColor_(NSColor::clearColor(nil));
+            }
+
+            win_attribs.min_inner_size.map(|dim| {
+                let logical_dim = dim.to_logical(dpi_factor);
+                set_min_inner_size(*ns_window, logical_dim)
+            });
+            win_attribs.max_inner_size.map(|dim| {
+                let logical_dim = dim.to_logical(dpi_factor);
+                set_max_inner_size(*ns_window, logical_dim)
+            });
+
+            use cocoa::foundation::NSArray;
+            // register for drag and drop operations.
+            let () = msg_send![
+                *ns_window,
+                registerForDraggedTypes:
+                    NSArray::arrayWithObject(nil, appkit::NSFilenamesPboardType)
+            ];
+        }
+
+        // Since `win_attribs` is put into a mutex below, we'll just copy these
+        // attributes now instead of bothering to lock it later.
+        // Also, `SharedState` doesn't carry `fullscreen` over; it's set
+        // indirectly by us calling `set_fullscreen` below, causing handlers in
+        // `WindowDelegate` to update the state.
+        let fullscreen = win_attribs.fullscreen.take();
+        let maximized = win_attribs.maximized;
+        let visible = win_attribs.visible;
+        let decorations = win_attribs.decorations;
+        let inner_rect = win_attribs
+            .inner_size
+            .map(|size| size.to_physical(dpi_factor));
+
+        let ns_view_ptr = *ns_view;
+        let window = Arc::new(UnownedWindow {
+            ns_view,
+            ns_window,
+            input_context,
+            shared_state: Arc::new(Mutex::new(win_attribs.into())),
+            decorations: AtomicBool::new(decorations),
+            cursor_state,
+            inner_rect,
+            managed_by_external_code: true,
+        });
+
+        let delegate = new_delegate(&window, fullscreen.is_some());
+
+        // Set fullscreen mode after we setup everything
+        window.set_fullscreen(fullscreen);
+
+        // Setting the window as key has to happen *after* we set the fullscreen
+        // state, since otherwise we'll briefly see the window at normal size
+        // before it transitions.
+        unsafe {
+            if visible {
+                window.ns_window.makeKeyAndOrderFront_(nil);
+            } else {
+                window.ns_window.makeKeyWindow();
+            }
+        }
+
+        if maximized {
+            window.set_maximized(maximized);
+        }
+
+        Ok((window, ns_view_ptr, delegate))
     }
 
     fn set_style_mask_async(&self, mask: NSWindowStyleMask) {
@@ -1097,7 +1225,7 @@ impl Drop for UnownedWindow {
     fn drop(&mut self) {
         trace!("Dropping `UnownedWindow` ({:?})", self as *mut _);
         // Close the window if it has not yet been closed.
-        if *self.ns_window != nil {
+        if *self.ns_window != nil && !self.managed_by_external_code {
             unsafe { util::close_async(*self.ns_window) };
         }
     }

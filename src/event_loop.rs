@@ -130,6 +130,13 @@ impl<T> EventLoop<T> {
         }
     }
 
+    pub fn for_existing_window() -> EventLoop<T> {
+        EventLoop {
+            event_loop: platform_impl::EventLoop::for_existing_window(),
+            _marker: ::std::marker::PhantomData,
+        }
+    }
+
     /// Hijacks the calling thread and initializes the winit event loop with the provided
     /// closure. Since the closure is `'static`, it must be a `move` closure if it needs to
     /// access any data from the calling context.
@@ -177,6 +184,32 @@ impl<T> Deref for EventLoop<T> {
     type Target = EventLoopWindowTarget<T>;
     fn deref(&self) -> &EventLoopWindowTarget<T> {
         self.event_loop.window_target()
+    }
+}
+
+pub struct EventSubscriber {
+    pub event_subscriber: platform_impl::EventSubscriber,
+}
+
+impl EventSubscriber {
+    pub fn new() -> Self {
+        EventSubscriber {
+            event_subscriber: platform_impl::EventSubscriber::new(),
+        }
+    }
+
+    #[inline]
+    pub fn receive_events<F>(&mut self, event_handler: F) -> ()
+    where
+        F: 'static + FnMut(Event<'_, ()>, &EventLoopWindowTarget<()>, &mut ControlFlow),
+    {
+        self.event_subscriber.set_callback(event_handler);
+    }
+}
+
+impl fmt::Debug for EventSubscriber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad("EventSubscriber { .. }")
     }
 }
 

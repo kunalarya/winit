@@ -17,9 +17,12 @@ mod window_delegate;
 use std::{fmt, ops::Deref, sync::Arc};
 
 pub use self::{
-    event_loop::{EventLoop, EventLoopWindowTarget, Proxy as EventLoopProxy},
+    event_loop::{EventLoop, EventLoopWindowTarget, EventSubscriber, Proxy as EventLoopProxy},
     monitor::{MonitorHandle, VideoMode},
-    window::{Id as WindowId, PlatformSpecificWindowBuilderAttributes, UnownedWindow},
+    window::{
+        Id as WindowId, PlatformSpecificChildWindow, PlatformSpecificParentHandle,
+        PlatformSpecificWindowBuilderAttributes, UnownedWindow,
+    },
 };
 use crate::{
     error::OsError as RootOsError, event::DeviceId as RootDeviceId, window::WindowAttributes,
@@ -70,6 +73,20 @@ impl Window {
     ) -> Result<Self, RootOsError> {
         let (window, _delegate) = UnownedWindow::new(attributes, pl_attribs)?;
         Ok(Window { window, _delegate })
+    }
+
+    pub fn from_parent(
+        parent: &PlatformSpecificParentHandle,
+        attributes: WindowAttributes,
+        pl_attribs: PlatformSpecificWindowBuilderAttributes,
+    ) -> Result<(Self, PlatformSpecificChildWindow, EventSubscriber), RootOsError> {
+        let (window, view, _delegate) = UnownedWindow::from_parent(parent, attributes, pl_attribs)?;
+        let observer = EventSubscriber::new();
+        // TODO: Create a new PlatformSpecificCreatedWindow wrapper to store
+        // handles needed by new child windows (in this case, the view is needed
+        // for, e.g. setting up the OpenGL context).
+        let child_window_info = PlatformSpecificChildWindow::new(view);
+        Ok((Window { window, _delegate }, child_window_info, observer))
     }
 }
 

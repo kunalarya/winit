@@ -1,10 +1,11 @@
 //! The `Window` struct and associated types.
 use std::fmt;
+use std::os::raw::c_void;
 
 use crate::{
     dpi::{PhysicalPosition, PhysicalSize, Position, Size},
     error::{ExternalError, NotSupportedError, OsError},
-    event_loop::EventLoopWindowTarget,
+    event_loop::{EventLoopWindowTarget, EventSubscriber},
     monitor::{MonitorHandle, VideoMode},
     platform_impl,
 };
@@ -77,6 +78,12 @@ impl WindowId {
     pub unsafe fn dummy() -> Self {
         WindowId(platform_impl::WindowId::dummy())
     }
+}
+
+/// Trait that allows users to build a platform-specific parent handld wrapper
+/// from a raw C pointer.
+pub trait WindowParentHandle {
+    fn from_raw(window_handle: *mut c_void) -> Self;
 }
 
 /// Object that allows you to build windows.
@@ -337,6 +344,36 @@ impl WindowBuilder {
             },
         )
     }
+
+    /// Requests the window be a child of the given parent window.
+    #[inline]
+    pub fn build_with_parent(self, parent: *mut c_void) -> Result<ChildWindow, OsError> {
+        let handle = platform_impl::PlatformSpecificParentHandle::from_raw(parent);
+        platform_impl::Window::from_parent(&handle, self.window, self.platform_specific).map(
+            |(window, child_window_info, event_subscriber)| {
+                window.request_redraw();
+                ChildWindow {
+                    window: Window { window },
+                    event_subscriber: EventSubscriber { event_subscriber },
+                    child_window_info: ChildWindowInfo { child_window_info },
+                }
+            },
+        )
+    }
+}
+
+/// Child Window Information.
+///
+/// For example, in MacOS, if we want to use glutin, we need to return the new
+/// view we've created.
+pub struct ChildWindow {
+    pub window: Window,
+    pub event_subscriber: EventSubscriber,
+    pub child_window_info: ChildWindowInfo,
+}
+
+pub struct ChildWindowInfo {
+    pub child_window_info: platform_impl::PlatformSpecificChildWindow,
 }
 
 /// Base Window functions.

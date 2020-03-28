@@ -52,6 +52,7 @@ impl<T> EventLoop<T> {
             // be marked as main.
             let app: id = msg_send![APP_CLASS.0, sharedApplication];
 
+            info!("Creating AppDelegateClass");
             let delegate = IdRef::new(msg_send![APP_DELEGATE_CLASS.0, new]);
             let pool = NSAutoreleasePool::new(nil);
             let _: () = msg_send![app, setDelegate:*delegate];
@@ -65,6 +66,17 @@ impl<T> EventLoop<T> {
                 _marker: PhantomData,
             }),
             _delegate: delegate,
+        }
+    }
+
+    pub fn for_existing_window() -> Self {
+        setup_control_flow_observers();
+        EventLoop {
+            window_target: Rc::new(RootWindowTarget {
+                p: Default::default(),
+                _marker: PhantomData,
+            }),
+            _delegate: IdRef::new(nil),
         }
     }
 
@@ -107,6 +119,29 @@ impl<T> EventLoop<T> {
 
     pub fn create_proxy(&self) -> Proxy<T> {
         Proxy::new(self.window_target.p.sender.clone())
+    }
+}
+
+pub struct EventSubscriber {}
+
+impl EventSubscriber {
+    pub fn new() -> Self {
+        setup_control_flow_observers();
+        AppState::launched();
+        EventSubscriber {}
+    }
+
+    pub fn set_callback<F>(&mut self, callback: F)
+    where
+        F: FnMut(Event<'_, ()>, &RootWindowTarget<()>, &mut ControlFlow),
+    {
+        let window_target = Rc::new(RootWindowTarget {
+            p: Default::default(),
+            _marker: PhantomData,
+        });
+        unsafe {
+            AppState::set_callback(callback, Rc::clone(&window_target));
+        }
     }
 }
 

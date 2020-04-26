@@ -881,26 +881,32 @@ fn mouse_click(this: &Object, event: id, button: MouseButton, button_state: Elem
 }
 
 extern "C" fn mouse_down(this: &Object, _sel: Sel, event: id) {
+    mouse_motion(this, event);
     mouse_click(this, event, MouseButton::Left, ElementState::Pressed);
 }
 
 extern "C" fn mouse_up(this: &Object, _sel: Sel, event: id) {
+    mouse_motion(this, event);
     mouse_click(this, event, MouseButton::Left, ElementState::Released);
 }
 
 extern "C" fn right_mouse_down(this: &Object, _sel: Sel, event: id) {
+    mouse_motion(this, event);
     mouse_click(this, event, MouseButton::Right, ElementState::Pressed);
 }
 
 extern "C" fn right_mouse_up(this: &Object, _sel: Sel, event: id) {
+    mouse_motion(this, event);
     mouse_click(this, event, MouseButton::Right, ElementState::Released);
 }
 
 extern "C" fn other_mouse_down(this: &Object, _sel: Sel, event: id) {
+    mouse_motion(this, event);
     mouse_click(this, event, MouseButton::Middle, ElementState::Pressed);
 }
 
 extern "C" fn other_mouse_up(this: &Object, _sel: Sel, event: id) {
+    mouse_motion(this, event);
     mouse_click(this, event, MouseButton::Middle, ElementState::Released);
 }
 
@@ -998,6 +1004,9 @@ extern "C" fn mouse_exited(this: &Object, _sel: Sel, _event: id) {
 
 extern "C" fn scroll_wheel(this: &Object, _sel: Sel, event: id) {
     trace!("Triggered `scrollWheel`");
+
+    mouse_motion(this, event);
+
     unsafe {
         let delta = {
             let (x, y) = (event.scrollingDeltaX(), event.scrollingDeltaY());
@@ -1043,6 +1052,9 @@ extern "C" fn scroll_wheel(this: &Object, _sel: Sel, event: id) {
 
 extern "C" fn pressure_change_with_event(this: &Object, _sel: Sel, event: id) {
     trace!("Triggered `pressureChangeWithEvent`");
+
+    mouse_motion(this, event);
+
     unsafe {
         let state_ptr: *mut c_void = *this.get_ivar("winitState");
         let state = &mut *(state_ptr as *mut ViewState);

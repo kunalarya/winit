@@ -1223,7 +1223,11 @@ impl WindowExtMacOS for UnownedWindow {
 
 impl Drop for UnownedWindow {
     fn drop(&mut self) {
-        trace!("Dropping `UnownedWindow` ({:?})", self as *mut _);
+        trace!(
+            "Dropping `UnownedWindow` ({:?}), managed_by_external_code: {}",
+            self as *mut _,
+            self.managed_by_external_code
+        );
         // Close the window if it has not yet been closed.
         if *self.ns_window != nil && !self.managed_by_external_code {
             unsafe { util::close_async(*self.ns_window) };

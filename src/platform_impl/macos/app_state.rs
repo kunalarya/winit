@@ -245,6 +245,12 @@ impl AppState {
         }));
     }
 
+    // We need to unset the callback to allow the handler, and any variables
+    // it's taken ownership of, to drop.
+    pub unsafe fn reset_callback() {
+        *HANDLER.callback.lock().unwrap() = None;
+    }
+
     pub fn exit() {
         HANDLER.set_in_callback(true);
         HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::LoopDestroyed));

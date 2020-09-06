@@ -145,6 +145,15 @@ impl EventSubscriber {
     }
 }
 
+impl Drop for EventSubscriber {
+    fn drop(&mut self) {
+        // Ensure the 'static callback is dropped.
+        unsafe {
+            AppState::reset_callback();
+        }
+    }
+}
+
 pub struct Proxy<T> {
     sender: mpsc::Sender<T>,
     source: CFRunLoopSourceRef,

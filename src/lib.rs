@@ -118,7 +118,7 @@
 //! [`platform`]: platform
 
 #![deny(rust_2018_idioms)]
-#![deny(intra_doc_link_resolution_failure)]
+#![deny(broken_intra_doc_links)]
 
 #[allow(unused_imports)]
 #[macro_use]

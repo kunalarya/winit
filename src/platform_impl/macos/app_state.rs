@@ -173,6 +173,12 @@ impl Handler {
                 }
                 EventWrapper::EventProxy(proxy) => self.handle_proxy(proxy, callback),
             }
+        } else {
+            // If the callback hasn't been set, wait 100ms so we don't get stuck
+            // in a spinloop.
+            use std::time::Duration;
+            *self.control_flow.lock().unwrap() =
+                ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(100));
         }
     }
 
